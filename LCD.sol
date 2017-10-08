@@ -1,4 +1,4 @@
-pragma solidity ^0.4.16;
+pragma solidity ^0.4.17;
 
 /**
  * @title SafeMath
@@ -70,6 +70,50 @@ contract Ownable {
 
 }
 
+/**
+ * @title Pausable
+ * @dev Base contract which allows children to implement an emergency stop mechanism.
+ */
+contract Pausable is Ownable {
+  event Pause();
+  event Unpause();
+
+  bool public paused = true;
+
+
+  /**
+   * @dev Modifier to make a function callable only when the contract is not paused.
+   */
+  modifier whenNotPaused() {
+    require(!paused);
+    _;
+  }
+
+  /**
+   * @dev Modifier to make a function callable only when the contract is paused.
+   */
+  modifier whenPaused() {
+    require(paused);
+    _;
+  }
+
+  /**
+   * @dev called by the owner to pause, triggers stopped state
+   */
+  function pause() onlyOwner whenNotPaused public {
+    paused = true;
+    Pause();
+  }
+
+  /**
+   * @dev called by the owner to unpause, returns to normal state
+   */
+  function unpause() onlyOwner whenPaused public {
+    paused = false;
+    Unpause();
+  }
+}
+
 contract Token {
     uint256 public totalSupply;
 
@@ -95,7 +139,7 @@ contract Token {
  * @dev https://github.com/ethereum/EIPs/issues/20
  * @dev Based on code by FirstBlood: https://github.com/Firstbloodio/token/blob/master/smart_contract/FirstBloodToken.sol
  */
-contract StandardToken is Token, Ownable {
+contract StandardToken is Token, Pausable {
 
     using SafeMath for uint256;
 
@@ -109,7 +153,7 @@ contract StandardToken is Token, Ownable {
     * @param _to The address to transfer to.
     * @param _value The amount to be transferred.
     */
-    function transfer(address _to, uint256 _value) public returns (bool) {
+    function transfer(address _to, uint256 _value) public whenNotPaused returns (bool) {
         require(_to != address(0));
 
         // SafeMath.sub will throw if there is not enough balance.
@@ -135,7 +179,7 @@ contract StandardToken is Token, Ownable {
      * @param _to address The address which you want to transfer to
      * @param _value uint256 the amount of tokens to be transferred
      */
-    function transferFrom(address _from, address _to, uint256 _value) public returns (bool) {
+    function transferFrom(address _from, address _to, uint256 _value) public whenNotPaused returns (bool) {
         require(_to != address(0));
 
         uint256 _allowance = allowed[_from][msg.sender];
@@ -342,6 +386,7 @@ contract LCD is StandardToken, Status, RefundableCrowdsale {
     uint256 public endTimeOne = 1509433200; // 10/31/2017 @ 7:00am (UTC)
     uint256 public startTimeTwo = 1509480000; // 10/31/2017 @ 8:00pm (UTC)
     uint256 public oneTokenInWei = 33333333333333300;
+    Stage public currentStage = Stage.Two;
 
     event CreateLCD(address indexed _to, uint256 _value);
     event PriceChanged(string _text, uint _newPrice);
@@ -353,6 +398,11 @@ contract LCD is StandardToken, Status, RefundableCrowdsale {
         totalSupply = balances[escrow];
     }
 
+    enum Stage {
+        One,
+        Two
+    }
+
     function () payable {
         createTokens();
     }
@@ -361,23 +411,32 @@ contract LCD is StandardToken, Status, RefundableCrowdsale {
         uint multiplier = 10 ** decimals;
         if (now >= startTimeOne && now <= endTimeOne) {
             uint256 tokens = msg.value.div(oneTokenInWei) * multiplier;
-            tokens += tokens / 100 * 40;
             uint256 checkedSupply = totalSupply.add(tokens);
             if(checkedSupply <= tokenCreationCapOne) {
-                addTokens(tokens);
+                addTokens(tokens, 40);
+                updateStage();
             }
-        } else if (now >= startTimeTwo && now <= endTimeTwo) {
+        } else if (currentStage == Stage.Two || now >= startTimeTwo && now <= endTimeTwo) {
             tokens = msg.value.div(oneTokenInWei) * multiplier;
             checkedSupply = totalSupply.add(tokens);
             if (checkedSupply <= tokenCreationCap) {
-                addTokens(tokens);
+                addTokens(tokens, 0);
             }
         } else {
             revert();
         }
     }
 
-    function addTokens(uint256 tokens) internal {
+    function updateStage() internal {
+        if (totalSupply >= tokenCreationCapOne) {
+            currentStage = Stage.Two;
+        }
+    }
+
+    function addTokens(uint256 tokens, uint sale) internal {
+        if (sale > 0) {
+            tokens += tokens / 100 * sale;
+        }
         balances[msg.sender] += tokens;
         totalSupply = totalSupply.add(tokens);
         weiRaised += msg.value;
@@ -388,6 +447,10 @@ contract LCD is StandardToken, Status, RefundableCrowdsale {
     function setTokenPrice(uint256 _tokenPrice) external onlyOwner {
         oneTokenInWei = _tokenPrice;
         PriceChanged("New price is", _tokenPrice);
+    }
+
+    function changeStageTwo() external onlyOwner {
+        currentStage = Stage.Two;
     }
 
     function destroy() onlyOwner external {
